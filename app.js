@@ -2,7 +2,7 @@
 /* FinDeuda Cartera — app privada. Los datos viven solo en su hoja de Google;
    en el celular solo se guarda, cifrado con su PIN, el acceso al script. */
 (() => {
-  const VAULT = 'fd_vault', FAILS = 'fd_fallos', VERSION = '1.0';
+  const VAULT = 'fd_vault', FAILS = 'fd_fallos', VERSION = '1.1';
   const ITER = 600000, PIN_LEN = 6, MAX_PIN_FAILS = 5;
   const LOCK_BG_MS = 60 * 1000, IDLE_MS = 5 * 60 * 1000, DIAS_MORA = 45;
   const root = document.getElementById('root');
@@ -316,16 +316,53 @@
     if (ui.rango === 'todo') return ['', ''];
     return [ui.desde, ui.hasta];
   }
+  function grafica() {
+    const t = D.hoy || hoy(); let [y, m] = t.split('-').map(Number);
+    const meses = [];
+    for (let i = 0; i < 12; i++) {
+      const mm = String(m).padStart(2, '0'), last = new Date(Date.UTC(y, m, 0)).getUTCDate();
+      meses.unshift({ y, m, key: `${y}-${mm}`, d: `${y}-${mm}-01`, h: `${y}-${mm}-${last}`, v: 0, n: 0 });
+      m--; if (!m) { m = 12; y--; }
+    }
+    const idx = new Map(meses.map((x, i) => [x.key, i]));
+    D.pagos.forEach(p => { const i = idx.get((p.fecha || '').slice(0, 7)); if (i !== undefined) { meses[i].v += p.valor; meses[i].n++; } });
+    const max = Math.max(1, ...meses.map(x => x.v));
+    const paso = [5e5, 1e6, 2e6, 2.5e6, 5e6, 1e7, 2e7, 2.5e7, 5e7, 1e8].find(s => max / s <= 4) || 1e8;
+    const tope = Math.ceil(max / paso) * paso;
+    const W = 340, H = 170, L = 34, B = 22, T = 8, cw = (W - L) / 12, bw = cw - 6;
+    const yv = v => T + (H - T - B) * (1 - v / tope);
+    const fm = v => v >= 1e6 ? (v / 1e6).toFixed(v % 1e6 ? 1 : 0).replace('.', ',') + ' M' : v ? Math.round(v / 1e3) + ' mil' : '0';
+    const sel = ui.rango === 'custom' ? ui.desde.slice(0, 7) : ui.rango === 'mes' ? t.slice(0, 7) : '';
+    let grid = '';
+    for (let v = 0; v <= tope; v += paso) grid += `<line x1="${L}" x2="${W}" y1="${yv(v)}" y2="${yv(v)}" stroke="var(--sep)" stroke-width="1"/><text x="${L - 5}" y="${yv(v) + 3.5}" text-anchor="end" font-size="9.5" fill="var(--sub)">${fm(v)}</text>`;
+    const bars = meses.map((x, i) => {
+      const x0 = L + i * cw + 3, h = Math.max(0, H - B - yv(x.v)), y0 = H - B - h, r = Math.min(4, h);
+      const path = h > 0 ? `M${x0},${H - B} V${y0 + r} Q${x0},${y0} ${x0 + r},${y0} H${x0 + bw - r} Q${x0 + bw},${y0} ${x0 + bw},${y0 + r} V${H - B} Z` : '';
+      const on = !sel || sel === x.key;
+      return `<g data-act="mes" data-d="${x.d}" data-h="${x.h}" style="cursor:pointer"><title>${MES[x.m - 1]} ${x.y}: ${money(x.v)} · ${x.n} pago(s)</title>
+        <rect x="${L + i * cw}" y="${T}" width="${cw}" height="${H - T}" fill="transparent"/>
+        ${path ? `<path d="${path}" fill="var(--blue)" opacity="${on ? 1 : .3}"/>` : ''}
+        <text x="${x0 + bw / 2}" y="${H - 7}" text-anchor="middle" font-size="9.5" fill="${sel === x.key ? 'var(--text)' : 'var(--sub)'}" font-weight="${sel === x.key ? 700 : 400}">${MES[x.m - 1]}</text></g>`;
+    }).join('');
+    const act = meses[11], ant = meses[10], prom = sum(meses.slice(0, 11), x => x.v) / 11;
+    const dif = ant.v ? (act.v - ant.v) / ant.v * 100 : 0;
+    return `<div class="card"><div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">
+        <div style="font-weight:650">Recaudo por mes</div><div style="font-size:12px;color:var(--sub)">últimos 12 meses</div></div>
+      <svg viewBox="0 0 ${W} ${H}" style="width:100%;display:block" role="img" aria-label="Recaudo por mes">${grid}${bars}</svg>
+      <div style="display:flex;justify-content:space-between;font-size:13px;color:var(--sub);margin-top:8px">
+        <span>Promedio: <b style="color:var(--text)">${money(prom)}</b></span>
+        <span>Vs. mes anterior: <b style="color:var(--text)">${ant.v ? (dif >= 0 ? '+' : '') + dif.toFixed(0) + '%' : '—'}</b></span></div>
+      <p class="sync" style="margin-top:6px">Toque una barra para ver los pagos de ese mes</p></div>`;
+  }
   function vPagos() {
     const [de, ha] = rangoFechas();
     const L = sortPagos(D.pagos.filter(p => ui.rango === 'todo' || (p.fecha && (!de || p.fecha >= de) && (!ha || p.fecha <= ha))));
     const chip = (k, l) => `<button class="chip ${ui.rango === k ? 'on' : ''}" data-act="rango" data-k="${k}">${l}</button>`;
-    return `<div class="chips">${chip('mes', 'Este mes')}${chip('ant', 'Mes anterior')}${chip('30', 'Últimos 30 días')}${chip('todo', 'Todo')}${chip('custom', 'Elegir fechas')}</div>
+    return `${grafica()}<div class="chips">${chip('mes', 'Este mes')}${chip('ant', 'Mes anterior')}${chip('30', 'Últimos 30 días')}${chip('todo', 'Todo')}${chip('custom', 'Elegir fechas')}</div>
       ${ui.rango === 'custom' ? `<div class="form"><div class="field"><label>Desde</label><input type="date" data-in="desde" value="${esc(ui.desde)}"></div><div class="field"><label>Hasta</label><input type="date" data-in="hasta" value="${esc(ui.hasta)}"></div></div>` : ''}
       <div class="card hero"><div class="lbl">${ui.rango === 'todo' ? 'Todos los pagos' : `${fdate(de)} – ${fdate(ha)}`}</div><div class="big">${money(sum(L, p => p.valor))}</div><div class="row"><span>${L.length} pago(s)</span></div></div>
       <div class="list">${L.map(pagoItem).join('') || '<div class="empty">No hay pagos en ese rango</div>'}</div>`;
   }
-
   function vAjustes() {
     return `<div class="list">
         <div class="kv"><span>Dispositivo</span><span>${esc(S.nombre || '—')}</span></div>
@@ -333,6 +370,7 @@
         <div class="kv"><span>Versión</span><span>${VERSION}</span></div></div>
       <p class="foot">Sus datos se leen de su hoja de Google cada vez que abre la app y no se guardan en el celular. La app se bloquea sola a los 5 minutos sin uso o 1 minuto en segundo plano.</p>
       <button class="btn sec" data-act="reload">Recargar datos</button>
+      <button class="btn sec" data-act="formRecibo">Datos del recibo</button>
       <button class="btn sec" data-act="cambiarPin">Cambiar PIN</button>
       <button class="btn sec" data-act="lock">Bloquear ahora</button>
       <div style="height:22px"></div>
@@ -487,7 +525,7 @@
     } catch (e) { } finally { if (F) F.busy = false; loading(false); }
   }
 
-  /* ---- nuevo cliente ---- */
+  /* ---- nuevo cliente / editar cliente ---- */
   const TIPOS = [['Insolvencia', 'Insolvencia'], ['Alimentos', 'Alimentos'], ['Alimentos y Insolvencia', 'Ambos']];
   function calcCliente() {
     const p = D.parametros || { alimentos: 3000000, porcentaje: 0.1, tarifas: [] };
@@ -497,36 +535,44 @@
     let t = { tarifa: 0, cuotas: 0 };
     if (deuda) p.tarifas.forEach(x => { if (x.desde <= deuda - 0.001) t = x; });
     const rad = F.radManual ? F.rad : t.tarifa;
-    const com = F.com !== 'Si' || !contrato ? 0 : contrato < 6e6 ? 2e5 : contrato < 1e7 ? 2.5e5 : 5e5;
+    const com = F.com === 'No' || !contrato ? 0 : contrato < 6e6 ? 2e5 : contrato < 1e7 ? 2.5e5 : 5e5;
     return { ali, ins, contrato, deuda, tarifa: t.tarifa, cuotas: t.cuotas, rad, com, gus: contrato * 0.1, neto: contrato - com - rad };
   }
-  function formCliente() {
-    sheetBack = null;
-    F = { tipo: 'cliente', nombre: '', ced: '', inicio: D.hoy || hoy(), tp: 'Insolvencia', ins: 0, com: 'No', rad: 0, radManual: false };
-    openSheet(head('Nuevo cliente', ['Guardar', 'saveCliente']) + `<div class="body">
+  function formCliente(c) {
+    const ed = c && c.id ? c : null;
+    sheetBack = ed ? ed.id : null;
+    F = ed
+      ? { tipo: 'cliente', edit: ed, nombre: ed.nombre, ced: digits(ed.id), inicio: ed.inicio, tp: TIPOS.some(t => t[0] === ed.tipo) ? ed.tipo : 'Insolvencia',
+          ins: ed.insolvencia, com: ed.tieneComision || 'No', rad: ed.radicacion, radManual: true }
+      : { tipo: 'cliente', nombre: '', ced: '', inicio: D.hoy || hoy(), tp: 'Insolvencia', ins: 0, com: 'No', rad: 0, radManual: false };
+    const comOpts = [['Si', 'Sí'], ['No', 'No']];
+    if (F.com === 'Veinte Porciento') comOpts.push(['Veinte Porciento', '20%']);
+    openSheet(head(ed ? 'Editar cliente' : 'Nuevo cliente', ['Guardar', 'saveCliente']) + `<div class="body">
       <div class="form">
-        <div class="field"><label>Nombre</label><input data-in="nombre" autocapitalize="characters" autocomplete="off" placeholder="NOMBRE COMPLETO"></div>
-        <div class="field"><label>Cédula</label><input data-in="ced" inputmode="numeric" autocomplete="off" placeholder="1.090.000.000"></div>
-        <div class="field"><label>Fecha de inicio</label><input type="date" data-in="inicio" value="${F.inicio}"></div></div>
+        <div class="field"><label>Nombre</label><input data-in="nombre" autocapitalize="characters" autocomplete="off" placeholder="NOMBRE COMPLETO" value="${esc(F.nombre)}"></div>
+        <div class="field"><label>Cédula</label><input data-in="ced" inputmode="numeric" autocomplete="off" placeholder="1.090.000.000" value="${F.ced ? dots(F.ced) : ''}"></div>
+        <div class="field"><label>Fecha de inicio</label><input type="date" data-in="inicio" value="${esc(F.inicio)}"></div></div>
       <div class="form">
         <div class="field"><label>Proceso</label><div class="seg" id="segT">${segHtml('tp', TIPOS, F.tp)}</div></div>
-        <div class="field" id="fIns"><label>Valor insolvencia</label>${moneyInput('ins', 0)}</div>
-        <div class="field"><label>¿Comisión?</label><div class="seg" id="segC">${segHtml('com', [['Si', 'Sí'], ['No', 'No']], F.com)}</div></div>
-        <div class="field"><label>Radicación</label><input data-in="rad" id="iRad" inputmode="numeric" autocomplete="off" placeholder="Según la tabla"></div></div>
-      <p class="foot">La radicación se llena sola con la tabla de tarifas. Puede cambiarla si lo pactado es otro valor.</p>
+        <div class="field${F.tp === 'Alimentos' ? ' hidden' : ''}" id="fIns"><label>Valor insolvencia</label>${moneyInput('ins', F.ins)}</div>
+        <div class="field"><label>¿Comisión?</label><div class="seg" id="segC">${segHtml('com', comOpts, F.com)}</div></div>
+        <div class="field"><label>Radicación</label><input data-in="rad" id="iRad" inputmode="numeric" autocomplete="off" placeholder="Según la tabla" value="${ed ? '$ ' + dots(F.rad) : ''}"></div></div>
+      <p class="foot">${ed ? 'La radicación queda como está. Si la borra, se calcula con la tabla de tarifas. Si cambia la cédula, también se actualiza en sus pagos y comisiones.' : 'La radicación se llena sola con la tabla de tarifas. Puede cambiarla si lo pactado es otro valor.'}</p>
       <div id="pv">${pvCliente()}</div>
-      <button class="btn" data-act="saveCliente">Guardar cliente</button></div>`);
+      <button class="btn" data-act="saveCliente">${ed ? 'Guardar cambios' : 'Guardar cliente'}</button></div>`);
     syncRad();
   }
-  function syncRad() { if (!F.radManual) { const k = calcCliente(); const i = $('#iRad'); if (i) i.value = k.tarifa ? '$ ' + dots(k.tarifa) : '$ 0'; } }
+  function syncRad() { if (!F.radManual) { const k = calcCliente(); const i = $('#iRad'); if (i && document.activeElement !== i) i.value = k.tarifa ? '$ ' + dots(k.tarifa) : '$ 0'; } }
+  const cedDup = dg => dg && D.clientes.some(c => digits(c.id) === dg && !(F.edit && c.id === F.edit.id));
   function pvCliente() {
     const k = calcCliente(), w = [];
-    const dg = digits(F.ced);
-    if (dg && D.clientes.some(c => digits(c.id) === dg)) w.push('Esta identificación ya existe en Principal.');
+    if (cedDup(digits(F.ced))) w.push('Esta identificación ya la tiene otro cliente.');
+    if (F.edit && k.contrato < F.edit.cancelado) w.push(`El nuevo contrato (${money(k.contrato)}) queda por debajo de lo que ya pagó (${money(F.edit.cancelado)}).`);
     return `${w.map(x => `<div class="warn">⚠ ${x}</div>`).join('')}<h2 class="sec">Cálculo automático</h2><div class="list">
       <div class="kv"><span>Alimentos</span><span>${money(k.ali)}</span></div>
       <div class="kv"><span>Insolvencia</span><span>${money(k.ins)}</span></div>
       <div class="kv"><span><b>Valor de contrato</b></span><span><b>${money(k.contrato)}</b></span></div>
+      ${F.edit ? `<div class="kv"><span>Antes</span><span>${money(F.edit.contrato)}</span></div>` : ''}
       <div class="kv"><span>Deuda del cliente</span><span>${money(k.deuda)}</span></div>
       <div class="kv"><span>Radicación (tabla)</span><span>${money(k.tarifa)}${k.cuotas ? ` · ${k.cuotas} cuota(s)` : ''}</span></div>
       <div class="kv neg"><span>Comisión</span><span>${money(k.com)}</span></div>
@@ -536,18 +582,106 @@
   }
   async function saveCliente() {
     if (!F || F.busy) return;
-    const k = calcCliente(), dg = digits(F.ced);
+    const k = calcCliente(), dg = digits(F.ced), ed = F.edit;
     if (F.nombre.trim().length < 5) return toast('Escriba el nombre completo');
     if (dg.length < 5) return toast('Escriba la cédula');
-    if (D.clientes.some(c => digits(c.id) === dg)) return toast('Esa cédula ya existe');
+    if (cedDup(dg)) return toast('Esa cédula ya la tiene otro cliente');
     if (F.tp.includes('Insolvencia') && !(F.ins > 0)) return toast('Escriba el valor de insolvencia');
-    if (!confirm(`¿Guardar a ${F.nombre.trim().toUpperCase()} con contrato de ${money(k.contrato)}?`)) return;
+    const nom = F.nombre.trim().toUpperCase();
+    if (!confirm(ed ? `¿Guardar los cambios de ${nom}?\nContrato: ${money(ed.contrato)} → ${money(k.contrato)}` : `¿Guardar a ${nom} con contrato de ${money(k.contrato)}?`)) return;
     F.busy = true; loading(true);
+    const id = ed && digits(ed.id) === dg ? ed.id : dots(dg);
+    const datos = { nombre: F.nombre, id, inicio: F.inicio, tipo: F.tp, insolvencia: F.ins, tieneComision: F.com, radicacion: F.radManual ? F.rad : '' };
     try {
-      const r = await api('cliente', { nombre: F.nombre, id: dots(dg), inicio: F.inicio, tipo: F.tp, insolvencia: F.ins, tieneComision: F.com, radicacion: k.rad });
+      const r = ed ? await api('editarCliente', Object.assign(datos, { fila: ed.fila, idOriginal: ed.id })) : await api('cliente', datos);
       if (!r.ok) return toast(r.error);
-      toast('Cliente guardado'); await load(true); showCliente(dots(dg));
+      toast(ed ? 'Cambios guardados' : 'Cliente guardado'); await load(true); showCliente(r.id || id);
     } catch (e) { } finally { if (F) F.busy = false; loading(false); }
+  }
+
+  /* ---- recibo de pago ---- */
+  const RECIBO = 'fd_recibo';
+  const datosRecibo = () => { try { return Object.assign({ firma: 'FinDeuda', nit: '', tel: '', ciudad: 'Cúcuta' }, JSON.parse(localStorage.getItem(RECIBO) || '{}')); } catch (e) { return { firma: 'FinDeuda', nit: '', tel: '', ciudad: 'Cúcuta' }; } };
+  function saldoTras(c, p) {
+    const k = q => (q.fecha || '0000-00-00') + String(q.fila).padStart(6, '0');
+    const abonado = sum(c.pagos.filter(q => k(q) <= k(p)), q => q.valor) + c.descuento;
+    return { abonado, saldo: c.contrato - abonado };
+  }
+  let logoImg = null;
+  const cargarLogo = () => logoImg ? Promise.resolve(logoImg) : new Promise(res => { const i = new Image(); i.onload = () => { logoImg = i; res(i); }; i.onerror = () => res(null); i.src = 'icon-512.png'; });
+  function wrap(ctx, text, x, y, maxW, lh) {
+    const words = String(text).split(' '); let line = '', lines = 0;
+    for (const w of words) { const t = line ? line + ' ' + w : w; if (ctx.measureText(t).width > maxW && line) { ctx.fillText(line, x, y + lines * lh); lines++; line = w; } else line = t; }
+    ctx.fillText(line, x, y + lines * lh); return lines + 1;
+  }
+  async function dibujarRecibo(c, p) {
+    const R = datosRecibo(), W = 1080, H = 1400, cv = document.createElement('canvas');
+    cv.width = W; cv.height = H; const g = cv.getContext('2d');
+    const font = (w, s) => `${w} ${s}px -apple-system, "Helvetica Neue", Arial, sans-serif`;
+    g.fillStyle = '#ffffff'; g.fillRect(0, 0, W, H);
+    g.fillStyle = '#0b1f3a'; g.fillRect(0, 0, W, 250);
+    const logo = await cargarLogo(); if (logo) g.drawImage(logo, 70, 55, 140, 140);
+    g.fillStyle = '#fff'; g.font = font(700, 60); g.fillText(R.firma, 240, 125);
+    g.font = font(400, 32); g.globalAlpha = .8; g.fillText([R.nit && 'NIT ' + R.nit, R.tel].filter(Boolean).join(' · ') || 'Recibo de pago', 240, 175); g.globalAlpha = 1;
+    g.fillStyle = '#0b0b0f'; g.font = font(700, 46); g.fillText('RECIBO DE PAGO', 70, 340);
+    g.textAlign = 'right'; g.font = font(600, 34); g.fillStyle = '#5e5ce6'; g.fillText('N.º ' + String(p.fila).padStart(5, '0'), W - 70, 330);
+    g.font = font(400, 30); g.fillStyle = '#6b6b70'; g.fillText((R.ciudad ? R.ciudad + ', ' : '') + fdate(p.fecha), W - 70, 375); g.textAlign = 'left';
+    g.fillStyle = '#e5e5ea'; g.fillRect(70, 410, W - 140, 2);
+    g.fillStyle = '#6b6b70'; g.font = font(400, 30); g.fillText('Recibimos de', 70, 475);
+    g.fillStyle = '#0b0b0f'; g.font = font(700, 44); const nl = wrap(g, c.nombre, 70, 535, W - 140, 54);
+    let y = 535 + nl * 54;
+    g.fillStyle = '#6b6b70'; g.font = font(400, 30); g.fillText('C.C. ' + c.id, 70, y + 4); y += 70;
+    g.fillStyle = '#eef8f1'; g.beginPath(); g.roundRect ? g.roundRect(70, y, W - 140, 200, 24) : g.rect(70, y, W - 140, 200); g.fill();
+    g.fillStyle = '#1f7a3a'; g.font = font(500, 32); g.fillText('La suma de', 110, y + 62);
+    g.font = font(800, 92); g.fillText(money(p.valor), 110, y + 160); y += 260;
+    g.fillStyle = '#6b6b70'; g.font = font(400, 30); g.fillText('Concepto', 70, y);
+    g.fillStyle = '#0b0b0f'; g.font = font(500, 34); g.fillText('Abono a honorarios · ' + (c.tipo || 'proceso'), 70, y + 48); y += 110;
+    const s = saldoTras(c, p);
+    const fila = (k, v, b) => { g.fillStyle = '#e5e5ea'; g.fillRect(70, y - 46, W - 140, 2); g.fillStyle = b ? '#0b0b0f' : '#3a3a3c'; g.font = font(b ? 700 : 400, 34); g.fillText(k, 70, y); g.textAlign = 'right'; g.fillText(v, W - 70, y); g.textAlign = 'left'; y += 78; };
+    y += 30; fila('Valor del contrato', money(c.contrato)); fila('Total abonado a la fecha', money(s.abonado)); fila('Saldo pendiente', money(Math.max(0, s.saldo)), true);
+    g.fillStyle = '#e5e5ea'; g.fillRect(70, y - 46, W - 140, 2);
+    g.fillStyle = '#8e8e93'; g.font = font(400, 26); g.textAlign = 'center';
+    g.fillText('Gracias por su pago. Conserve este recibo como soporte.', W / 2, H - 90);
+    g.fillText('Generado el ' + fdate(hoy()), W / 2, H - 50); g.textAlign = 'left';
+    return cv;
+  }
+  async function showRecibo(fila, idBack) {
+    const p = D.pagos.find(x => x.fila === Number(fila)); if (!p) return toast('Pago no encontrado');
+    const c = D.byId.get(p.id); if (!c) return toast('Cliente no encontrado');
+    loading(true);
+    const cv = await dibujarRecibo(c, p); loading(false);
+    const url = cv.toDataURL('image/png');
+    const nombreArch = `Recibo-${c.nombre.split(' ')[0]}-${p.fecha || 'pago'}.png`;
+    F = { tipo: 'recibo', cv, nombreArch, tel: '' };
+    sheetBack = idBack || c.id;
+    openSheet(head('Recibo de pago') + `<div class="body">
+      <img src="${url}" alt="Recibo" style="width:100%;border-radius:12px;display:block;margin-bottom:14px;box-shadow:0 1px 6px rgba(0,0,0,.12)">
+      <button class="btn" data-act="compartirRecibo">Compartir (WhatsApp, correo…)</button>
+      <a class="btn sec" href="${url}" download="${esc(nombreArch)}" style="text-decoration:none">Guardar imagen</a>
+      <p class="foot" style="margin-top:12px">Los datos de la firma (NIT, teléfono, ciudad) se cambian en Ajustes → Datos del recibo.</p></div>`);
+  }
+  async function compartirRecibo() {
+    if (!F || F.tipo !== 'recibo') return;
+    const blob = await new Promise(r => F.cv.toBlob(r, 'image/png'));
+    const file = new File([blob], F.nombreArch, { type: 'image/png' });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      try { await navigator.share({ files: [file], title: 'Recibo de pago' }); } catch (e) { }
+    } else toast('Use "Guardar imagen" y envíela desde Fotos');
+  }
+  function formRecibo() {
+    const R = datosRecibo(); sheetBack = null;
+    F = { tipo: 'datosRecibo' };
+    openSheet(head('Datos del recibo', ['Guardar', 'saveDatosRecibo']) + `<div class="body"><div class="form">
+      <div class="field"><label>Firma</label><input id="rFirma" value="${esc(R.firma)}" maxlength="40"></div>
+      <div class="field"><label>NIT</label><input id="rNit" value="${esc(R.nit)}" maxlength="20" inputmode="numeric"></div>
+      <div class="field"><label>Teléfono</label><input id="rTel" value="${esc(R.tel)}" maxlength="25" inputmode="tel"></div>
+      <div class="field"><label>Ciudad</label><input id="rCiudad" value="${esc(R.ciudad)}" maxlength="30"></div></div>
+      <p class="foot">Aparecen en el encabezado de cada recibo. Se guardan solo en este celular.</p>
+      <button class="btn" data-act="saveDatosRecibo">Guardar</button></div>`);
+  }
+  function saveDatosRecibo() {
+    localStorage.setItem(RECIBO, JSON.stringify({ firma: $('#rFirma').value.trim() || 'FinDeuda', nit: $('#rNit').value.trim(), tel: $('#rTel').value.trim(), ciudad: $('#rCiudad').value.trim() }));
+    closeSheet(); toast('Datos del recibo guardados');
   }
 
   function menuNuevo() {
@@ -574,7 +708,10 @@
     nuevo: menuNuevo,
     formPago: el => { const id = el.dataset.id; formPago(id, id || null); },
     formComision: el => { const id = el.dataset.id; formComision(id, id || null); },
-    formCliente, savePago: () => savePago(false), saveComision, saveCliente,
+    formCliente: () => formCliente(), savePago: () => savePago(false), saveComision, saveCliente,
+    formEditar: el => formCliente(D.byId.get(el.dataset.id)),
+    recibo: el => showRecibo(el.dataset.fila), compartirRecibo, formRecibo, saveDatosRecibo,
+    mes: el => { ui.rango = 'custom'; ui.desde = el.dataset.d; ui.hasta = el.dataset.h; rerenderMain(); },
     pick: el => { F.id = el.dataset.id; $('#picker').innerHTML = pickerHtml(); const pv = $('#pv'); if (pv && F.tipo === 'pago') pv.innerHTML = pvPago(); },
     unpick: () => { F.id = ''; F.pq = ''; $('#picker').innerHTML = pickerHtml(); const pv = $('#pv'); if (pv) pv.innerHTML = ''; setTimeout(() => $('#pq') && $('#pq').focus(), 50); },
     seg: el => {
