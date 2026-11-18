@@ -2,7 +2,7 @@
 /* FinDeuda Cartera — app privada. Los datos viven solo en su hoja de Google;
    en el celular solo se guarda, cifrado con su PIN, el acceso al script. */
 (() => {
-  const VAULT = 'fd_vault', FAILS = 'fd_fallos', VERSION = '1.3';
+  const VAULT = 'fd_vault', FAILS = 'fd_fallos', VERSION = '1.4';
   const ITER = 600000, PIN_LEN = 6, MAX_PIN_FAILS = 5;
   const LOCK_BG_MS = 60 * 1000, IDLE_MS = 5 * 60 * 1000, DIAS_MORA = 45;
   const root = document.getElementById('root');
@@ -441,8 +441,9 @@
       <div class="list"><div class="kv"><span>Clientes en mora</span><span>${mora.length}</span></div>
         <div class="kv"><span>Total en mora</span><span>${money(sum(mora, c => c.pendiente))}</span></div>
         ${pv.length ? `<div class="kv"><span>Incluir próximos a vencer (${pv.length})</span><span><div class="seg" style="width:110px">${segHtml('pv', [['1', 'Sí'], ['', 'No']], '1')}</div></span></div>` : ''}</div>
-      <button class="btn" data-act="compartirReporte">Compartir por WhatsApp</button>
-      <button class="btn sec" data-act="copiarReporte">Copiar texto</button>
+      <button class="btn" data-act="pdfReporte">Enviar como PDF</button>
+      <button class="btn sec" data-act="imgReporte">Enviar como imagen</button>
+      <button class="btn sec" data-act="compartirReporte">Enviar como texto</button>
       <button class="btn sec" data-act="excelReporte">Enviar como Excel</button>
       <h2 class="sec">Vista previa</h2>
       <div class="card" id="rprev" style="white-space:pre-wrap;font-size:13px;line-height:1.45;max-height:340px;overflow:auto">${esc(textoReporte(true))}</div></div>`);
@@ -460,6 +461,105 @@
     const file = new File([csvReporte()], `Reporte-mora-${D.hoy || hoy()}.csv`, { type: 'text/csv' });
     if (navigator.canShare && navigator.canShare({ files: [file] })) { try { await navigator.share({ files: [file], title: 'Reporte de mora' }); } catch (e) { } }
     else toast('Este celular no permite compartir archivos; use "Copiar texto"');
+  }
+
+  /* ---- reporte de mora en imagen / PDF (páginas tamaño carta a 150 ppp) ---- */
+  async function paginasReporte(inclPv) {
+    const { mora, pv, b } = datosReporte(), R = datosRecibo(), logo = await cargarLogo();
+    const W = 1275, H = 1650, M = 70, RH = 92;
+    const font = (w, s) => `${w} ${s}px -apple-system, "Helvetica Neue", Arial, sans-serif`;
+    const filas = mora.map((c, i) => ({ c, n: i + 1, t: 'mora' }));
+    if (inclPv && pv.length) { filas.push({ t: 'sec', l: 'PRÓXIMOS A VENCER (15 días)' }); pv.forEach((c, i) => filas.push({ c, n: i + 1, t: 'pv' })); }
+    const pages = []; let cv, g, y, page = 0;
+    const SAL = 830, DIA = 985, ULT = W - M - 14, cols = [M, M + 70];   // # y cliente a la izquierda; saldo, días y último pago alineados a la derecha
+    const nueva = () => {
+      cv = document.createElement('canvas'); cv.width = W; cv.height = H; g = cv.getContext('2d'); page++;
+      g.fillStyle = '#fff'; g.fillRect(0, 0, W, H);
+      if (page === 1) {
+        if (logo) g.drawImage(logo, M - 20, 40, 170, 170);
+        g.fillStyle = '#002c69'; g.font = font(800, 50); g.fillText(R.firma.toUpperCase(), M + 160, 115);
+        g.font = font(400, 28); g.fillText('Recupera tu tranquilidad financiera', M + 162, 158);
+        g.fillStyle = '#002c69'; g.fillRect(0, 235, W, 6);
+        g.fillStyle = '#0b0b0f'; g.font = font(800, 46); g.fillText('REPORTE DE MORA', M, 315);
+        g.textAlign = 'right'; g.fillStyle = '#6b6b70'; g.font = font(400, 28); g.fillText((R.ciudad ? R.ciudad + ', ' : '') + fdate(D.hoy || hoy()), W - M, 310); g.textAlign = 'left';
+        if (b) { g.font = font(500, 28); g.fillStyle = '#c0392b'; g.fillText('Filtro: ' + b[0].toLowerCase() + ' sin pagar', M, 355); }
+        const box = (x, w, l, v, col) => { g.fillStyle = '#f2f2f7'; g.beginPath(); g.roundRect ? g.roundRect(x, 385, w, 130, 18) : g.rect(x, 385, w, 130); g.fill(); g.fillStyle = '#6b6b70'; g.font = font(400, 26); g.fillText(l, x + 26, 428); g.fillStyle = col; g.font = font(800, 44); g.fillText(v, x + 26, 488); };
+        const bw = (W - 2 * M - 40) / 3;
+        box(M, bw, 'Total en mora', money(sum(mora, c => c.pendiente)), '#c0392b');
+        box(M + bw + 20, bw, 'Clientes en mora', String(mora.length), '#0b0b0f');
+        box(M + 2 * (bw + 20), bw, 'Promedio sin pagar', (mora.length ? Math.round(sum(mora, c => c.sinPagar) / mora.length) : 0) + ' días', '#0b0b0f');
+        y = 575;
+      } else {
+        g.fillStyle = '#002c69'; g.font = font(700, 30); g.fillText(R.firma.toUpperCase() + ' · Reporte de mora', M, 80);
+        g.textAlign = 'right'; g.fillStyle = '#6b6b70'; g.font = font(400, 26); g.fillText(fdate(D.hoy || hoy()), W - M, 80); g.textAlign = 'left';
+        g.fillStyle = '#002c69'; g.fillRect(M, 100, W - 2 * M, 3); y = 160;
+      }
+      g.fillStyle = '#002c69'; g.fillRect(M, y - 40, W - 2 * M, 56);
+      g.fillStyle = '#fff'; g.font = font(700, 24);
+      g.fillText('#', cols[0] + 14, y - 3); g.fillText('CLIENTE / CÉDULA', cols[1], y - 3);
+      g.textAlign = 'right'; g.fillText('SALDO', SAL, y - 3); g.fillText('DÍAS', DIA, y - 3); g.fillText('ÚLT. PAGO', ULT, y - 3); g.textAlign = 'left';
+      y += 30; pages.push(cv);
+    };
+    nueva();
+    let alt = false;
+    for (const f of filas) {
+      if (y + RH > H - 90) nueva();
+      if (f.t === 'sec') { y += 20; g.fillStyle = '#b36b00'; g.font = font(800, 28); g.fillText(f.l, M, y + 40); y += 70; alt = false; continue; }
+      const c = f.c;
+      if (alt) { g.fillStyle = '#f6f7fb'; g.fillRect(M, y, W - 2 * M, RH); } alt = !alt;
+      g.fillStyle = '#8e8e93'; g.font = font(600, 26); g.fillText(String(f.n), cols[0] + 14, y + 55);
+      g.fillStyle = '#0b0b0f'; g.font = font(700, 27);
+      let nom = c.nombre; while (g.measureText(nom).width > SAL - 200 - cols[1] && nom.length > 5) nom = nom.slice(0, -2);
+      if (nom !== c.nombre) nom = nom.trim() + '…';
+      g.fillText(nom, cols[1], y + 40);
+      g.fillStyle = '#6b6b70'; g.font = font(400, 24); g.fillText('CC ' + c.id, cols[1], y + 74);
+      g.textAlign = 'right'; g.fillStyle = '#0b0b0f'; g.font = font(700, 27); g.fillText(money(c.pendiente), SAL, y + 55);
+      g.fillStyle = f.t === 'pv' ? '#b36b00' : c.sinPagar > 180 ? '#a01818' : c.sinPagar > 90 ? '#c0392b' : '#d35400';
+      g.font = font(700, 27); g.fillText(f.t === 'pv' ? fdate(c.limite).replace(/ \d{4}$/, '') : c.sinPagar + ' días', DIA, y + 55);
+      g.fillStyle = '#3a3a3c'; g.font = font(400, 25); g.fillText(c.ultimo ? fdate(c.ultimo) : 'sin fecha', ULT, y + 55); g.textAlign = 'left';
+      y += RH;
+    }
+    if (!filas.length) { g.fillStyle = '#6b6b70'; g.font = font(500, 30); g.fillText('No hay clientes en mora.', M, y + 50); }
+    pages.forEach((p, i) => { const x = p.getContext('2d'); x.fillStyle = '#8e8e93'; x.font = font(400, 22); x.textAlign = 'center'; x.fillText(`Página ${i + 1} de ${pages.length} · Generado el ${fdate(hoy())}`, W / 2, H - 45); });
+    return pages;
+  }
+  const blobDe = (cv, type, q) => new Promise(r => cv.toBlob(r, type, q));
+  async function crearPdf(pages) {
+    const te2 = new TextEncoder(), parts = [], offs = []; let len = 0;
+    const push = x => { const u = typeof x === 'string' ? te2.encode(x) : x; parts.push(u); len += u.length; };
+    const obj = (n, body) => { offs[n] = len; push(`${n} 0 obj\n`); body(); push('\nendobj\n'); };
+    const PW = 612, PH = 792, n = pages.length;
+    push('%PDF-1.4\n%\xE2\xE3\xCF\xD3\n');
+    obj(1, () => push('<< /Type /Catalog /Pages 2 0 R >>'));
+    obj(2, () => push(`<< /Type /Pages /Count ${n} /Kids [${pages.map((_, i) => `${3 + i * 3} 0 R`).join(' ')}] >>`));
+    for (let i = 0; i < n; i++) {
+      const p = 3 + i * 3, jpg = new Uint8Array(await (await blobDe(pages[i], 'image/jpeg', .88)).arrayBuffer());
+      const cs = `q ${PW} 0 0 ${PH} 0 0 cm /Im${i} Do Q`;
+      obj(p, () => push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${PW} ${PH}] /Resources << /XObject << /Im${i} ${p + 2} 0 R >> >> /Contents ${p + 1} 0 R >>`));
+      obj(p + 1, () => push(`<< /Length ${cs.length} >>\nstream\n${cs}\nendstream`));
+      obj(p + 2, () => { push(`<< /Type /XObject /Subtype /Image /Width ${pages[i].width} /Height ${pages[i].height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpg.length} >>\nstream\n`); push(jpg); push('\nendstream'); });
+    }
+    const total = 3 + n * 3, xref = len;
+    push(`xref\n0 ${total}\n0000000000 65535 f \n` + offs.slice(1).map(o => String(o).padStart(10, '0') + ' 00000 n \n').join(''));
+    push(`trailer\n<< /Size ${total} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`);
+    return new Blob(parts, { type: 'application/pdf' });
+  }
+  async function compartirArchivos(files, titulo) {
+    if (navigator.canShare && navigator.canShare({ files })) { try { await navigator.share({ files, title: titulo }); } catch (e) { } return; }
+    files.forEach(f => { const a = document.createElement('a'); a.href = URL.createObjectURL(f); a.download = f.name; document.body.appendChild(a); a.click(); a.remove(); });
+  }
+  async function pdfReporte() {
+    loading(true);
+    try { const pdf = await crearPdf(await paginasReporte(!!F.pv)); loading(false); await compartirArchivos([new File([pdf], `Reporte-mora-${D.hoy || hoy()}.pdf`, { type: 'application/pdf' })], 'Reporte de mora'); }
+    finally { loading(false); }
+  }
+  async function imgReporte() {
+    loading(true);
+    try {
+      const pages = await paginasReporte(!!F.pv), files = [];
+      for (let i = 0; i < pages.length; i++) files.push(new File([await blobDe(pages[i], 'image/png')], `Reporte-mora-${D.hoy || hoy()}${pages.length > 1 ? '-' + (i + 1) : ''}.png`, { type: 'image/png' }));
+      loading(false); await compartirArchivos(files, 'Reporte de mora');
+    } finally { loading(false); }
   }
 
   function anCartera() {
@@ -856,7 +956,7 @@
     chip: el => { ui.filtro = el.dataset.k; rerenderMain(); },
     rango: el => { ui.rango = el.dataset.k; if (ui.rango === 'custom' && !ui.desde) { ui.desde = `${(D.hoy || hoy()).slice(0, 7)}-01`; ui.hasta = D.hoy || hoy(); } rerenderMain(); },
     reload: () => load(), lock,
-    reporteMora, compartirReporte, copiarReporte, excelReporte,
+    reporteMora, pdfReporte, imgReporte, compartirReporte, copiarReporte, excelReporte,
     an: el => { ui.an = el.dataset.k; ui.bucket = -1; rerenderMain(); },
     bucket: el => { const k = Number(el.dataset.k); ui.bucket = ui.bucket === k ? -1 : k; rerenderMain(); },
     irMora: () => { ui.tab = 'analisis'; ui.an = 'mora'; ui.bucket = -1; closeSheet(true); renderShell(); window.scrollTo(0, 0); },
