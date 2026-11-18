@@ -2,7 +2,7 @@
 /* FinDeuda Cartera — app privada. Los datos viven solo en su hoja de Google;
    en el celular solo se guarda, cifrado con su PIN, el acceso al script. */
 (() => {
-  const VAULT = 'fd_vault', FAILS = 'fd_fallos', VERSION = '1.2';
+  const VAULT = 'fd_vault', FAILS = 'fd_fallos', VERSION = '1.3';
   const ITER = 600000, PIN_LEN = 6, MAX_PIN_FAILS = 5;
   const LOCK_BG_MS = 60 * 1000, IDLE_MS = 5 * 60 * 1000, DIAS_MORA = 45;
   const root = document.getElementById('root');
@@ -387,7 +387,8 @@
     const lista = (sel ? sel.L : mora).slice().sort((x, y) => y.sinPagar - x.sinPagar);
     const pv = act.filter(c => c.porVencer).sort((x, y) => x.limite.localeCompare(y.limite));
     const sd = act.filter(c => c.sinDatos);
-    return `<div class="card hero" style="background:linear-gradient(135deg,#7a1020,#c0392b)"><div class="lbl">Cartera en mora</div><div class="big">${money(totMora)}</div>
+    return `<button class="btn" data-act="reporteMora" style="margin-bottom:12px">📋 Enviar reporte de mora${sel ? ' (' + sel.l.toLowerCase() + ')' : ''}</button>
+      <div class="card hero" style="background:linear-gradient(135deg,#7a1020,#c0392b)"><div class="lbl">Cartera en mora</div><div class="big">${money(totMora)}</div>
         <div class="row"><span>${mora.length} de ${act.length} clientes activos</span><span>${pct(totMora, totAct).toFixed(0)}% del saldo</span></div></div>
       <div class="grid2">
         <div class="card kpi"><div class="lbl">Días promedio sin pagar</div><div class="val">${mora.length ? Math.round(sum(mora, c => c.sinPagar) / mora.length) : 0}</div><div class="s">clientes en mora</div></div>
@@ -402,6 +403,65 @@
       ${sd.length ? `<h2 class="sec">Sin fecha para calcular</h2><div class="list">${sd.map(c => clienteItem(c, `<div class="v">${money(c.pendiente)}</div><span class="badge b-gray">Sin fechas</span>`)).join('')}</div>
         <p class="foot">No tienen pagos con fecha ni fecha de inicio. Póngale fecha de inicio con "Editar cliente".</p>` : ''}`;
   }
+  function datosReporte() {
+    const act = D.clientes.filter(c => !c.final && c.pendiente > 0);
+    let mora = act.filter(c => c.mora);
+    const b = ui.bucket >= 0 ? BUCKETS[ui.bucket] : null;
+    if (b) mora = mora.filter(c => c.sinPagar >= b[1] && c.sinPagar <= b[2]);
+    mora.sort((x, y) => y.sinPagar - x.sinPagar);
+    const pv = b ? [] : act.filter(c => c.porVencer).sort((x, y) => x.limite.localeCompare(y.limite));
+    return { mora, pv, b };
+  }
+  function textoReporte(inclPv) {
+    const { mora, pv, b } = datosReporte(), R = datosRecibo();
+    const L = [`*REPORTE DE MORA — ${R.firma.toUpperCase()}*`, `Fecha: ${fdate(D.hoy || hoy())}`];
+    if (b) L.push(`Filtro: ${b[0].toLowerCase()} sin pagar`);
+    L.push(`Total en mora: *${money(sum(mora, c => c.pendiente))}* (${mora.length} cliente${mora.length === 1 ? '' : 's'})`, '');
+    mora.forEach((c, i) => {
+      L.push(`*${i + 1}. ${c.nombre}*`, `CC ${c.id}`, `Saldo: ${money(c.pendiente)} · ${c.sinPagar} días sin pagar`, `Último pago: ${c.ultimo ? fdate(c.ultimo) : 'sin fecha'}`, '');
+    });
+    if (inclPv && pv.length) {
+      L.push(`*PRÓXIMOS A VENCER (15 días)*`, '');
+      pv.forEach((c, i) => L.push(`${i + 1}. ${c.nombre} — CC ${c.id}`, `   Saldo ${money(c.pendiente)} · vence ${fdate(c.limite)}`, ''));
+    }
+    return L.join('\n').trim();
+  }
+  function csvReporte() {
+    const { mora, pv } = datosReporte();
+    const q = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const rows = [['Estado', 'Nombre', 'Cédula', 'Tipo', 'Valor contrato', 'Cancelado', 'Saldo pendiente', 'Días sin pagar', 'Último pago', 'Fecha límite']];
+    mora.forEach(c => rows.push(['En mora', c.nombre, c.id, c.tipo, c.contrato, c.cancelado, c.pendiente, c.sinPagar, c.ultimo, c.limite]));
+    pv.forEach(c => rows.push(['Por vencer', c.nombre, c.id, c.tipo, c.contrato, c.cancelado, c.pendiente, c.sinPagar, c.ultimo, c.limite]));
+    return '﻿' + rows.map(r => r.map(q).join(';')).join('\r\n');
+  }
+  function reporteMora() {
+    const { mora, pv } = datosReporte();
+    sheetBack = null; F = { tipo: 'reporte', pv: true };
+    openSheet(head('Reporte de mora') + `<div class="body">
+      <div class="list"><div class="kv"><span>Clientes en mora</span><span>${mora.length}</span></div>
+        <div class="kv"><span>Total en mora</span><span>${money(sum(mora, c => c.pendiente))}</span></div>
+        ${pv.length ? `<div class="kv"><span>Incluir próximos a vencer (${pv.length})</span><span><div class="seg" style="width:110px">${segHtml('pv', [['1', 'Sí'], ['', 'No']], '1')}</div></span></div>` : ''}</div>
+      <button class="btn" data-act="compartirReporte">Compartir por WhatsApp</button>
+      <button class="btn sec" data-act="copiarReporte">Copiar texto</button>
+      <button class="btn sec" data-act="excelReporte">Enviar como Excel</button>
+      <h2 class="sec">Vista previa</h2>
+      <div class="card" id="rprev" style="white-space:pre-wrap;font-size:13px;line-height:1.45;max-height:340px;overflow:auto">${esc(textoReporte(true))}</div></div>`);
+  }
+  async function compartirReporte() {
+    const t = textoReporte(!!F.pv);
+    if (navigator.share) { try { await navigator.share({ text: t }); return; } catch (e) { if (e.name === 'AbortError') return; } }
+    await copiarReporte();
+  }
+  async function copiarReporte() {
+    try { await navigator.clipboard.writeText(textoReporte(!!F.pv)); toast('Reporte copiado. Péguelo en WhatsApp'); }
+    catch (e) { toast('No se pudo copiar'); }
+  }
+  async function excelReporte() {
+    const file = new File([csvReporte()], `Reporte-mora-${D.hoy || hoy()}.csv`, { type: 'text/csv' });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) { try { await navigator.share({ files: [file], title: 'Reporte de mora' }); } catch (e) { } }
+    else toast('Este celular no permite compartir archivos; use "Copiar texto"');
+  }
+
   function anCartera() {
     const C = D.clientes, act = C.filter(c => !c.final);
     const contr = sum(C, c => c.contrato), canc = sum(C, c => c.cancelado);
@@ -796,6 +856,7 @@
     chip: el => { ui.filtro = el.dataset.k; rerenderMain(); },
     rango: el => { ui.rango = el.dataset.k; if (ui.rango === 'custom' && !ui.desde) { ui.desde = `${(D.hoy || hoy()).slice(0, 7)}-01`; ui.hasta = D.hoy || hoy(); } rerenderMain(); },
     reload: () => load(), lock,
+    reporteMora, compartirReporte, copiarReporte, excelReporte,
     an: el => { ui.an = el.dataset.k; ui.bucket = -1; rerenderMain(); },
     bucket: el => { const k = Number(el.dataset.k); ui.bucket = ui.bucket === k ? -1 : k; rerenderMain(); },
     irMora: () => { ui.tab = 'analisis'; ui.an = 'mora'; ui.bucket = -1; closeSheet(true); renderShell(); window.scrollTo(0, 0); },
@@ -813,6 +874,7 @@
     seg: el => {
       F[el.dataset.key] = el.dataset.v;
       el.parentNode.querySelectorAll('button').forEach(b => b.classList.toggle('on', b === el));
+      if (F.tipo === 'reporte') { $('#rprev').textContent = textoReporte(!!F.pv); }
       if (F.tipo === 'cliente') { $('#fIns').classList.toggle('hidden', F.tp === 'Alimentos'); syncRad(); $('#pv').innerHTML = pvCliente(); }
     },
     anular: el => anular(el.dataset.fila),
