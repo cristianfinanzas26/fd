@@ -2,7 +2,7 @@
 /* FinDeuda Cartera — app privada. Los datos viven solo en su hoja de Google;
    en el celular solo se guarda, cifrado con su PIN, el acceso al script. */
 (() => {
-  const VAULT = 'fd_vault', FAILS = 'fd_fallos', VERSION = '1.4';
+  const VAULT = 'fd_vault', FAILS = 'fd_fallos', VERSION = '1.5';
   const ITER = 600000, PIN_LEN = 6, MAX_PIN_FAILS = 5;
   const LOCK_BG_MS = 60 * 1000, IDLE_MS = 5 * 60 * 1000, DIAS_MORA = 45;
   const root = document.getElementById('root');
@@ -348,10 +348,12 @@
         ${path ? `<path d="${path}" fill="var(--blue)" opacity="${on ? 1 : .3}"/>` : ''}
         <text x="${x0 + bw / 2}" y="${H - 7}" text-anchor="middle" font-size="9.5" fill="${sel === x.key ? 'var(--text)' : 'var(--sub)'}" font-weight="${sel === x.key ? 700 : 400}">${MES[x.m - 1]}</text></g>`;
     }).join('');
-    const act = meses[11], ant = meses[10], prom = sum(meses.slice(0, 11), x => x.v) / 11;
+    const act = meses[11], act0 = act, ant = meses[10], prom = sum(meses.slice(0, 11), x => x.v) / 11;
     const dif = ant.v ? (act.v - ant.v) / ant.v * 100 : 0;
-    return `<div class="card"><div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">
+    const ms = meses.find(x => x.key === (sel || t.slice(0, 7))) || act0;
+    return `<div class="card"><div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:2px">
         <div style="font-weight:650">Recaudo por mes</div><div style="font-size:12px;color:var(--sub)">últimos 12 meses</div></div>
+      <div style="font-size:14px;margin-bottom:6px"><span style="color:var(--sub)">${MES[ms.m - 1]} ${ms.y}:</span> <b>${money(ms.v)}</b> <span style="color:var(--sub)">· ${ms.n} pago(s)</span></div>
       <svg viewBox="0 0 ${W} ${H}" style="width:100%;display:block" role="img" aria-label="Recaudo por mes">${grid}${bars}</svg>
       <div style="display:flex;justify-content:space-between;font-size:13px;color:var(--sub);margin-top:8px">
         <span>Promedio: <b style="color:var(--text)">${money(prom)}</b></span>
@@ -586,11 +588,16 @@
       <div class="list">${top.map(c => clienteItem(c)).join('')}</div>`;
   }
   function anRecaudo() {
-    const t = D.hoy || hoy(), mes = t.slice(0, 7);
+    const t = D.hoy || hoy(), actual = t.slice(0, 7);
+    const mes = ui.rango === 'custom' && ui.desde ? ui.desde.slice(0, 7) : actual;
+    const esActual = mes === actual;
     const conF = D.pagos.filter(p => p.fecha);
     const pm = conF.filter(p => p.fecha.slice(0, 7) === mes);
-    const dia = Number(t.slice(8, 10)), [y, m] = t.split('-').map(Number), dm = new Date(Date.UTC(y, m, 0)).getUTCDate();
+    const [y, m] = mes.split('-').map(Number), dm = new Date(Date.UTC(y, m, 0)).getUTCDate(), dia = esActual ? Number(t.slice(8, 10)) : dm;
     const proy = dia ? sum(pm, p => p.valor) / dia * dm : 0;
+    const pmAnt = conF.filter(p => p.fecha.slice(0, 7) === (m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`));
+    const vAnt = sum(pmAnt, p => p.valor), vMes = sum(pm, p => p.valor);
+    const nomMes = `${MES[m - 1]} ${y}`;
     // clientes que pagaron este mes vs activos
     const act = D.clientes.filter(c => !c.final && c.pendiente > 0);
     const pagaron = new Set(pm.map(p => p.id));
@@ -602,11 +609,20 @@
     // quincena
     const q1 = sum(conF.filter(p => p.fecha >= desde && +p.fecha.slice(8) <= 15), p => p.valor), q2 = sum(conF.filter(p => p.fecha >= desde && +p.fecha.slice(8) > 15), p => p.valor);
     const sinFecha = D.pagos.length - conF.length;
+    const top = pm.slice().sort((a, b) => b.valor - a.valor || (b.fecha || '').localeCompare(a.fecha || ''));
     return `${grafica()}
+      ${!esActual ? `<button class="btn sec" data-act="rango" data-k="mes" style="margin-bottom:12px">Volver al mes actual</button>` : ''}
+      <h2 class="sec" style="margin-top:4px">${esActual ? 'Este mes' : nomMes.charAt(0).toUpperCase() + nomMes.slice(1)}</h2>
       <div class="grid2">
-        <div class="card kpi"><div class="lbl">Proyección del mes</div><div class="val">${money(proy)}</div><div class="s">al ritmo actual (día ${dia} de ${dm})</div></div>
-        <div class="card kpi"><div class="lbl">Activos que pagaron este mes</div><div class="val">${actPag} / ${act.length}</div><div class="s">${pct(actPag, act.length).toFixed(0)}%</div></div>
-        <div class="card kpi"><div class="lbl">Pago promedio</div><div class="val">${money(conF.length ? sum(conF, p => p.valor) / conF.length : 0)}</div></div>
+        <div class="card kpi"><div class="lbl">Recaudado</div><div class="val">${money(vMes)}</div><div class="s">${pm.length} pago(s)</div></div>
+        <div class="card kpi"><div class="lbl">Vs. mes anterior</div><div class="val" style="color:${vMes >= vAnt ? 'var(--green)' : 'var(--red)'}">${vAnt ? (vMes >= vAnt ? '+' : '') + ((vMes - vAnt) / vAnt * 100).toFixed(0) + '%' : '—'}</div><div class="s">antes ${money(vAnt)}</div></div>
+        ${esActual ? `<div class="card kpi"><div class="lbl">Proyección del mes</div><div class="val">${money(proy)}</div><div class="s">al ritmo actual (día ${dia} de ${dm})</div></div>` : `<div class="card kpi"><div class="lbl">Pago promedio del mes</div><div class="val">${money(pm.length ? vMes / pm.length : 0)}</div></div>`}
+        <div class="card kpi"><div class="lbl">Clientes que pagaron</div><div class="val">${new Set(pm.map(p => p.id)).size}</div><div class="s">${esActual ? `${actPag} de ${act.length} activos (${pct(actPag, act.length).toFixed(0)}%)` : 'distintos'}</div></div></div>
+      <h2 class="sec">Pagos de ${esActual ? 'este mes' : nomMes}</h2>
+      <div class="list">${top.map(pagoItem).join('') || '<div class="empty">No hay pagos con fecha en ese mes</div>'}</div>
+      <h2 class="sec">General</h2>
+      <div class="grid2">
+        <div class="card kpi"><div class="lbl">Pago promedio</div><div class="val">${money(conF.length ? sum(conF, p => p.valor) / conF.length : 0)}</div><div class="s">todos los pagos</div></div>
         <div class="card kpi"><div class="lbl">Pagos sin fecha</div><div class="val">${sinFecha}</div><div class="s">no entran en gráficas</div></div></div>
       <h2 class="sec">¿Qué quincena pagan más?</h2>
       <div class="list">${hrow('1 al 15', '', q1, money(q1), Math.max(q1, q2), 'var(--blue)')}${hrow('16 a fin de mes', '', q2, money(q2), Math.max(q1, q2), 'var(--blue)')}</div>
