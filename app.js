@@ -374,6 +374,7 @@
         <div class="row" style="margin-top:8px"><span>Cancelado ${money(c.cancelado)}</span><span>${pct(c.cancelado, c.contrato).toFixed(0)}%</span></div></div>
       <button class="btn" data-act="formPago" data-id="${esc(c.id)}">Registrar pago</button>
       <button class="btn sec" data-act="formComision" data-id="${esc(c.id)}">Agregar comisión</button>
+      <button class="btn sec" data-act="formEditar" data-id="${esc(c.id)}">Editar cliente</button>
       <h2 class="sec">Seguimiento</h2><div class="list">
         ${kv('Último pago', fdate(c.ultimo))}${kv(`Fecha límite (+${DIAS_MORA} días)`, c.limite ? fdate(c.limite) : '—')}
         ${kv('Estado', c.final ? 'Finalizado' : c.mora ? `En mora hace ${c.diasMora} día(s)` : 'Al día')}
@@ -385,7 +386,7 @@
         ${kv('Contrato neto', money(c.neto))}${kv('Ganancias netas', money(c.ganancia))}</div>
       <h2 class="sec">Historial (${mov.length})</h2>
       <div class="list">${mov.map(m => `<div class="item"><div class="mid"><div class="t">${m.t}</div><div class="d">${fdate(m.f)}</div></div>
-        <div class="r"><div class="v">${money(m.v)}</div></div>${m.p ? `<button class="mini" data-act="anular" data-fila="${m.p.fila}">Anular</button>` : ''}</div>`).join('') || '<div class="empty">Sin movimientos</div>'}</div>
+        <div class="r"><div class="v">${money(m.v)}</div></div>${m.p ? `<button class="mini ok" data-act="recibo" data-fila="${m.p.fila}">Recibo</button><button class="mini" data-act="anular" data-fila="${m.p.fila}">Anular</button>` : ''}</div>`).join('') || '<div class="empty">Sin movimientos</div>'}</div>
     </div>`);
   }
 
@@ -455,6 +456,7 @@
       if (!r.ok) { toast(r.error); return; }
       toast(`Pago de ${money(F.valor)} guardado`);
       await load(true); showCliente(c.id);
+      if (r.fila) setTimeout(() => showRecibo(r.fila, c.id), 350);
     } catch (e) { } finally { if (F) F.busy = false; loading(false); }
   }
 
