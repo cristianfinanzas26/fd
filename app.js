@@ -2,14 +2,14 @@
 /* FinDeuda Cartera — app privada. Los datos viven solo en su hoja de Google;
    en el celular solo se guarda, cifrado con su PIN, el acceso al script. */
 (() => {
-  const VAULT = 'fd_vault', FAILS = 'fd_fallos', VERSION = '1.1';
+  const VAULT = 'fd_vault', FAILS = 'fd_fallos', VERSION = '1.2';
   const ITER = 600000, PIN_LEN = 6, MAX_PIN_FAILS = 5;
   const LOCK_BG_MS = 60 * 1000, IDLE_MS = 5 * 60 * 1000, DIAS_MORA = 45;
   const root = document.getElementById('root');
 
   let S = null;            // sesión en memoria: {url, token, nombre}
   let D = null;            // datos de la hoja (solo en memoria)
-  let ui = { tab: 'inicio', filtro: 'todos', q: '', rango: 'mes', desde: '', hasta: '' };
+  let ui = { tab: 'inicio', filtro: 'todos', q: '', rango: 'mes', desde: '', hasta: '', an: 'mora', bucket: -1 };
   let gate = null;         // estado de pantallas de PIN / vinculación
   let F = null;            // estado del formulario abierto
   let sheetBack = null;    // a qué volver al cerrar un formulario
@@ -96,13 +96,16 @@
       c.limite = base ? dstr(dnum(base) + DIAS_MORA) : '';
       c.diasMora = c.limite ? t - dnum(c.limite) : 0;
       c.mora = !c.final && c.pendiente > 0 && !!c.limite && c.diasMora > 0;
+      c.sinPagar = base ? t - dnum(base) : 0;
+      c.porVencer = !c.final && c.pendiente > 0 && !!c.limite && c.diasMora <= 0 && c.diasMora > -15;
+      c.sinDatos = !c.final && c.pendiente > 0 && !c.limite;
       c.radicar = String(c.radEstado).toUpperCase() === 'RADICAR';
     });
     D.byId = byId;
   }
   function estadoBadge(c) {
     if (c.final) return '<span class="badge b-gray">Finalizado</span>';
-    if (c.mora) return `<span class="badge b-red">En mora · ${c.diasMora} d</span>`;
+    if (c.mora) return `<span class="badge b-red">Mora · ${c.sinPagar} d</span>`;
     return '<span class="badge b-green">Al día</span>';
   }
 
@@ -114,6 +117,7 @@
     gear: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="m19.4 13 .1-1-.1-1 2.1-1.6-2-3.5-2.5 1a7 7 0 0 0-1.7-1L15 3h-4l-.4 2.7a7 7 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11l-.1 1 .1 1-2.1 1.6 2 3.5 2.5-1c.5.4 1.1.7 1.7 1L11 21h4l.4-2.7c.6-.3 1.2-.6 1.7-1l2.5 1 2-3.5zM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7" transform="translate(-1)"/></svg>',
     plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
     reload: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M20 12a8 8 0 1 1-2.3-5.7M20 4v5h-5"/></svg>',
+    chart: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 20h16v2H4zM5 11h3v7H5zm5.5-5h3v12h-3zM16 13h3v5h-3z"/></svg>',
     lock: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M17 9V7A5 5 0 0 0 7 7v2H5v12h14V9zm-8 0V7a3 3 0 1 1 6 0v2z"/></svg>'
   };
   const LOGO = 'icon-180.png';
@@ -149,7 +153,7 @@
   }
 
   function renderPin() {
-    const t = { abrir: ['FinDeuda', 'Ingrese su PIN'], crear: ['Cree un PIN', `${PIN_LEN} dígitos para abrir la app`], confirmar: ['Confirme el PIN', 'Escríbalo otra vez'],
+    const t = { abrir: ['Findeudas Legales', 'Ingrese su PIN'], crear: ['Cree un PIN', `${PIN_LEN} dígitos para abrir la app`], confirmar: ['Confirme el PIN', 'Escríbalo otra vez'],
       viejo: ['Cambiar PIN', 'Escriba su PIN actual'], nuevo: ['PIN nuevo', `${PIN_LEN} dígitos`], nuevo2: ['Confirme el PIN nuevo', 'Escríbalo otra vez'] }[gate.modo];
     const dotsHtml = Array.from({ length: PIN_LEN }, (_, i) => `<i class="${i < gate.pin.length ? 'on' : ''}"></i>`).join('');
     const keys = [1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => `<button data-act="pk" data-k="${n}">${n}</button>`).join('');
@@ -230,11 +234,11 @@
     } catch (e) { /* sin sesión: ya se manejó */ } finally { loading(false); }
   }
 
-  const TABS = [['inicio', 'Inicio', I.home], ['clientes', 'Clientes', I.users], ['pagos', 'Pagos', I.cash], ['ajustes', 'Ajustes', I.gear]];
+  const TABS = [['inicio', 'Inicio', I.home], ['clientes', 'Clientes', I.users], ['pagos', 'Pagos', I.cash], ['analisis', 'Análisis', I.chart], ['ajustes', 'Ajustes', I.gear]];
   function renderShell() {
     if (!S) return;
-    const title = { inicio: 'Cartera', clientes: 'Clientes', pagos: 'Pagos', ajustes: 'Ajustes' }[ui.tab];
-    const body = !D ? '<div class="empty">Cargando…</div>' : ({ inicio: vInicio, clientes: vClientes, pagos: vPagos, ajustes: vAjustes }[ui.tab])();
+    const title = { inicio: 'Cartera', clientes: 'Clientes', pagos: 'Pagos', analisis: 'Análisis', ajustes: 'Ajustes' }[ui.tab];
+    const body = !D ? '<div class="empty">Cargando…</div>' : ({ inicio: vInicio, clientes: vClientes, pagos: vPagos, analisis: vAnalisis, ajustes: vAjustes }[ui.tab])();
     const scroll = window.scrollY;
     root.innerHTML = `
       <header class="top"><h1>${title}</h1><div class="acts">
@@ -248,7 +252,7 @@
   }
   function rerenderMain() {
     const m = $('#main'); if (!m || !D) return;
-    m.innerHTML = ({ inicio: vInicio, clientes: vClientes, pagos: vPagos, ajustes: vAjustes }[ui.tab])();
+    m.innerHTML = ({ inicio: vInicio, clientes: vClientes, pagos: vPagos, analisis: vAnalisis, ajustes: vAjustes }[ui.tab])();
   }
 
   function clienteItem(c, right) {
@@ -281,12 +285,12 @@
       <div class="grid2">
         <div class="card kpi"><div class="lbl">Recaudado este mes</div><div class="val">${money(sum(pm, p => p.valor))}</div><div class="s">${pm.length} pago(s)</div></div>
         <button class="card kpi" style="text-align:left" data-act="filtro" data-k="activos"><div class="lbl">Clientes activos</div><div class="val">${act.length}</div><div class="s">de ${C.length} en total</div></button>
-        <button class="card kpi" style="text-align:left" data-act="filtro" data-k="mora"><div class="lbl">En mora (+${DIAS_MORA} días)</div><div class="val" style="color:var(--red)">${mora.length}</div><div class="s">${money(sum(mora, c => c.pendiente))}</div></button>
+        <button class="card kpi" style="text-align:left" data-act="irMora"><div class="lbl">En mora (+${DIAS_MORA} días)</div><div class="val" style="color:var(--red)">${mora.length}</div><div class="s">${money(sum(mora, c => c.pendiente))}</div></button>
         <button class="card kpi" style="text-align:left" data-act="filtro" data-k="radicar"><div class="lbl">Listos para radicar</div><div class="val" style="color:var(--purple)">${rad.length}</div><div class="s">≥ 50% de insolvencia</div></button>
         <div class="card kpi"><div class="lbl">Netos activos</div><div class="val">${money(sum(act, c => c.neto))}</div></div>
         <div class="card kpi"><div class="lbl">Costos (rad., com., desc.)</div><div class="val">${money(costos)}</div></div>
       </div>
-      ${mora.length ? `<h2 class="sec">En mora <a data-act="filtro" data-k="mora">Ver todos</a></h2><div class="list">${mora.slice(0, 5).map(c => clienteItem(c)).join('')}</div>` : ''}
+      ${mora.length ? `<h2 class="sec">En mora <a data-act="irMora">Ver análisis</a></h2><div class="list">${mora.slice(0, 5).map(c => clienteItem(c)).join('')}</div>` : ''}
       ${rad.length ? `<h2 class="sec">Para radicar <a data-act="filtro" data-k="radicar">Ver todos</a></h2><div class="list">${rad.slice(0, 5).map(c => clienteItem(c, `<div class="v">${((c.radPct || 0) * 100).toFixed(0)}%</div><span class="badge b-purple">Radicar</span>`)).join('')}</div>` : ''}
       <h2 class="sec">Últimos pagos <a data-act="tab" data-k="pagos">Ver todos</a></h2>
       <div class="list">${ult.map(pagoItem).join('') || '<div class="empty">Sin pagos</div>'}</div>
@@ -363,6 +367,94 @@
       <div class="card hero"><div class="lbl">${ui.rango === 'todo' ? 'Todos los pagos' : `${fdate(de)} – ${fdate(ha)}`}</div><div class="big">${money(sum(L, p => p.valor))}</div><div class="row"><span>${L.length} pago(s)</span></div></div>
       <div class="list">${L.map(pagoItem).join('') || '<div class="empty">No hay pagos en ese rango</div>'}</div>`;
   }
+  function hrow(label, sub, val, valTxt, max, color, attrs, sel) {
+    return `<button class="hrow${sel ? ' sel' : ''}" ${attrs || ''}><div class="top"><span>${label}</span><b>${valTxt}</b></div>
+      ${sub ? `<div class="sub">${sub}</div>` : ''}<div class="track"><i style="width:${max > 0 ? Math.max(val ? 1.5 : 0, val / max * 100).toFixed(1) : 0}%;background:${color}"></i></div></button>`;
+  }
+  const BUCKETS = [['46 a 60 días', 46, 60, .4], ['61 a 90 días', 61, 90, .6], ['91 a 180 días', 91, 180, .8], ['Más de 180 días', 181, 1e9, 1]];
+  function vAnalisis() {
+    const chip = (k, l) => `<button class="chip ${ui.an === k ? 'on' : ''}" data-act="an" data-k="${k}">${l}</button>`;
+    return `<div class="chips">${chip('mora', 'Mora')}${chip('cartera', 'Cartera')}${chip('recaudo', 'Recaudo')}</div>` +
+      ({ mora: anMora, cartera: anCartera, recaudo: anRecaudo }[ui.an])();
+  }
+  function anMora() {
+    const C = D.clientes, act = C.filter(c => !c.final && c.pendiente > 0);
+    const mora = act.filter(c => c.mora);
+    const totAct = sum(act, c => c.pendiente), totMora = sum(mora, c => c.pendiente);
+    const b = BUCKETS.map(([l, a, z, op]) => { const L = mora.filter(c => c.sinPagar >= a && c.sinPagar <= z); return { l, op, L, v: sum(L, c => c.pendiente) }; });
+    const maxB = Math.max(...b.map(x => x.v));
+    const sel = ui.bucket >= 0 ? b[ui.bucket] : null;
+    const lista = (sel ? sel.L : mora).slice().sort((x, y) => y.sinPagar - x.sinPagar);
+    const pv = act.filter(c => c.porVencer).sort((x, y) => x.limite.localeCompare(y.limite));
+    const sd = act.filter(c => c.sinDatos);
+    return `<div class="card hero" style="background:linear-gradient(135deg,#7a1020,#c0392b)"><div class="lbl">Cartera en mora</div><div class="big">${money(totMora)}</div>
+        <div class="row"><span>${mora.length} de ${act.length} clientes activos</span><span>${pct(totMora, totAct).toFixed(0)}% del saldo</span></div></div>
+      <div class="grid2">
+        <div class="card kpi"><div class="lbl">Días promedio sin pagar</div><div class="val">${mora.length ? Math.round(sum(mora, c => c.sinPagar) / mora.length) : 0}</div><div class="s">clientes en mora</div></div>
+        <div class="card kpi"><div class="lbl">Por vencer (15 días)</div><div class="val" style="color:var(--orange)">${pv.length}</div><div class="s">${money(sum(pv, c => c.pendiente))}</div></div></div>
+      <h2 class="sec">Antigüedad de la mora</h2>
+      <div class="list">${b.map((x, i) => hrow(x.l, `${x.L.length} cliente(s)`, x.v, money(x.v), maxB, `rgba(214,48,49,${x.op})`, `data-act="bucket" data-k="${i}"`, ui.bucket === i)).join('')}</div>
+      <p class="foot">Días sin pagar desde el último pago con fecha (o la fecha de inicio). Toque una franja para filtrar la lista.</p>
+      <h2 class="sec">${sel ? 'Mora ' + sel.l.toLowerCase() : 'Clientes en mora'} ${sel ? '<a data-act="bucket" data-k="-1">Ver todos</a>' : ''}</h2>
+      <div class="list">${lista.map(c => clienteItem(c, `<div class="v">${money(c.pendiente)}</div><span class="badge b-red">${c.sinPagar} d sin pagar</span>`)).join('') || '<div class="empty">Nadie en mora 🎉</div>'}</div>
+      ${pv.length ? `<h2 class="sec">Próximos a entrar en mora</h2><div class="list">${pv.map(c => clienteItem(c, `<div class="v">${money(c.pendiente)}</div><span class="badge b-orange">Vence ${fdate(c.limite).replace(/ \d{4}$/, '')}</span>`)).join('')}</div>
+        <p class="foot">Al día, pero su plazo de ${DIAS_MORA} días se cumple en las próximas 2 semanas. Buen momento para recordarles.</p>` : ''}
+      ${sd.length ? `<h2 class="sec">Sin fecha para calcular</h2><div class="list">${sd.map(c => clienteItem(c, `<div class="v">${money(c.pendiente)}</div><span class="badge b-gray">Sin fechas</span>`)).join('')}</div>
+        <p class="foot">No tienen pagos con fecha ni fecha de inicio. Póngale fecha de inicio con "Editar cliente".</p>` : ''}`;
+  }
+  function anCartera() {
+    const C = D.clientes, act = C.filter(c => !c.final);
+    const contr = sum(C, c => c.contrato), canc = sum(C, c => c.cancelado);
+    const tipos = ['Insolvencia', 'Alimentos y Insolvencia', 'Alimentos'].map(t => { const L = C.filter(c => c.tipo === t); return { t, L, p: sum(L, c => c.pendiente), k: sum(L, c => c.contrato) }; });
+    const maxT = Math.max(...tipos.map(x => x.p));
+    const top = act.slice().sort((a, b) => b.pendiente - a.pendiente).slice(0, 5);
+    const est = [['Al día', act.filter(c => !c.mora && !c.sinDatos).length, 'var(--green)'], ['En mora', act.filter(c => c.mora).length, 'var(--red)'], ['Sin fechas', act.filter(c => c.sinDatos).length, 'var(--sub)'], ['Finalizados', C.length - act.length, 'var(--blue)']];
+    const maxE = Math.max(...est.map(x => x[1]));
+    return `<div class="card hero"><div class="lbl">Cartera recuperada</div><div class="big">${pct(canc, contr).toFixed(1)}%</div>
+        <div class="bar" style="background:rgba(255,255,255,.2)"><i style="width:${pct(canc, contr).toFixed(1)}%"></i></div>
+        <div class="row" style="margin-top:8px"><span>${money(canc)} de ${money(contr)}</span></div></div>
+      <div class="grid2">
+        <div class="card kpi"><div class="lbl">Contrato promedio</div><div class="val">${money(C.length ? contr / C.length : 0)}</div></div>
+        <div class="card kpi"><div class="lbl">Saldo promedio (activos)</div><div class="val">${money(act.length ? sum(act, c => c.pendiente) / act.length : 0)}</div></div>
+        <div class="card kpi"><div class="lbl">Ganancias netas</div><div class="val">${money(sum(C, c => c.ganancia))}</div><div class="s">todos los contratos</div></div>
+        <div class="card kpi"><div class="lbl">Para radicar</div><div class="val" style="color:var(--purple)">${act.filter(c => c.radicar).length}</div><div class="s">≥ 50% de insolvencia</div></div></div>
+      <h2 class="sec">Estado de los clientes</h2>
+      <div class="list">${est.map(([l, n, col]) => hrow(l, '', n, `${n} · ${pct(n, C.length).toFixed(0)}%`, maxE, col)).join('')}</div>
+      <h2 class="sec">Saldo por tipo de proceso</h2>
+      <div class="list">${tipos.map(x => hrow(x.t, `${x.L.length} cliente(s) · contratos ${money(x.k)}`, x.p, money(x.p), maxT, 'var(--blue)')).join('')}</div>
+      <h2 class="sec">Mayores saldos pendientes</h2>
+      <div class="list">${top.map(c => clienteItem(c)).join('')}</div>`;
+  }
+  function anRecaudo() {
+    const t = D.hoy || hoy(), mes = t.slice(0, 7);
+    const conF = D.pagos.filter(p => p.fecha);
+    const pm = conF.filter(p => p.fecha.slice(0, 7) === mes);
+    const dia = Number(t.slice(8, 10)), [y, m] = t.split('-').map(Number), dm = new Date(Date.UTC(y, m, 0)).getUTCDate();
+    const proy = dia ? sum(pm, p => p.valor) / dia * dm : 0;
+    // clientes que pagaron este mes vs activos
+    const act = D.clientes.filter(c => !c.final && c.pendiente > 0);
+    const pagaron = new Set(pm.map(p => p.id));
+    const actPag = act.filter(c => pagaron.has(c.id)).length;
+    // por día de la semana (últimos 6 meses)
+    const desde = dstr(dnum(t) - 182), DS = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+    const sem = DS.map(() => 0); conF.filter(p => p.fecha >= desde).forEach(p => { sem[new Date(dnum(p.fecha) * 864e5).getUTCDay()] += p.valor; });
+    const maxS = Math.max(...sem);
+    // quincena
+    const q1 = sum(conF.filter(p => p.fecha >= desde && +p.fecha.slice(8) <= 15), p => p.valor), q2 = sum(conF.filter(p => p.fecha >= desde && +p.fecha.slice(8) > 15), p => p.valor);
+    const sinFecha = D.pagos.length - conF.length;
+    return `${grafica()}
+      <div class="grid2">
+        <div class="card kpi"><div class="lbl">Proyección del mes</div><div class="val">${money(proy)}</div><div class="s">al ritmo actual (día ${dia} de ${dm})</div></div>
+        <div class="card kpi"><div class="lbl">Activos que pagaron este mes</div><div class="val">${actPag} / ${act.length}</div><div class="s">${pct(actPag, act.length).toFixed(0)}%</div></div>
+        <div class="card kpi"><div class="lbl">Pago promedio</div><div class="val">${money(conF.length ? sum(conF, p => p.valor) / conF.length : 0)}</div></div>
+        <div class="card kpi"><div class="lbl">Pagos sin fecha</div><div class="val">${sinFecha}</div><div class="s">no entran en gráficas</div></div></div>
+      <h2 class="sec">¿Qué quincena pagan más?</h2>
+      <div class="list">${hrow('1 al 15', '', q1, money(q1), Math.max(q1, q2), 'var(--blue)')}${hrow('16 a fin de mes', '', q2, money(q2), Math.max(q1, q2), 'var(--blue)')}</div>
+      <h2 class="sec">Recaudo por día de la semana</h2>
+      <div class="list">${[1, 2, 3, 4, 5, 6, 0].map(i => hrow(DS[i], '', sem[i], money(sem[i]), maxS, 'var(--blue)')).join('')}</div>
+      <p class="foot">Últimos 6 meses. Le sirve para saber cuándo mandar los recordatorios de pago.</p>`;
+  }
+
   function vAjustes() {
     return `<div class="list">
         <div class="kv"><span>Dispositivo</span><span>${esc(S.nombre || '—')}</span></div>
@@ -415,7 +507,7 @@
       <button class="btn sec" data-act="formEditar" data-id="${esc(c.id)}">Editar cliente</button>
       <h2 class="sec">Seguimiento</h2><div class="list">
         ${kv('Último pago', fdate(c.ultimo))}${kv(`Fecha límite (+${DIAS_MORA} días)`, c.limite ? fdate(c.limite) : '—')}
-        ${kv('Estado', c.final ? 'Finalizado' : c.mora ? `En mora hace ${c.diasMora} día(s)` : 'Al día')}
+        ${kv('Estado', c.final ? 'Finalizado' : c.mora ? `En mora · ${c.sinPagar} días sin pagar` : 'Al día')}
         ${kv('Radicación', `${c.radPct == null ? '—' : ((c.radPct) * 100).toFixed(0) + '%'} · ${esc(c.radEstado || '—')}`)}</div>
       <h2 class="sec">Contrato</h2><div class="list">
         ${kv('Valor de contrato', money(c.contrato))}${kv('Alimentos', money(c.alimentos))}${kv('Insolvencia', money(c.insolvencia))}
@@ -601,7 +693,7 @@
 
   /* ---- recibo de pago ---- */
   const RECIBO = 'fd_recibo';
-  const datosRecibo = () => { try { return Object.assign({ firma: 'FinDeuda', nit: '', tel: '', ciudad: 'Cúcuta' }, JSON.parse(localStorage.getItem(RECIBO) || '{}')); } catch (e) { return { firma: 'FinDeuda', nit: '', tel: '', ciudad: 'Cúcuta' }; } };
+  const datosRecibo = () => { try { return Object.assign({ firma: 'Findeudas Legales', nit: '', tel: '', ciudad: 'Cúcuta' }, JSON.parse(localStorage.getItem(RECIBO) || '{}')); } catch (e) { return { firma: 'Findeudas Legales', nit: '', tel: '', ciudad: 'Cúcuta' }; } };
   function saldoTras(c, p) {
     const k = q => (q.fecha || '0000-00-00') + String(q.fila).padStart(6, '0');
     const abonado = sum(c.pagos.filter(q => k(q) <= k(p)), q => q.valor) + c.descuento;
@@ -619,12 +711,13 @@
     cv.width = W; cv.height = H; const g = cv.getContext('2d');
     const font = (w, s) => `${w} ${s}px -apple-system, "Helvetica Neue", Arial, sans-serif`;
     g.fillStyle = '#ffffff'; g.fillRect(0, 0, W, H);
-    g.fillStyle = '#0b1f3a'; g.fillRect(0, 0, W, 250);
-    const logo = await cargarLogo(); if (logo) g.drawImage(logo, 70, 55, 140, 140);
-    g.fillStyle = '#fff'; g.font = font(700, 60); g.fillText(R.firma, 240, 125);
-    g.font = font(400, 32); g.globalAlpha = .8; g.fillText([R.nit && 'NIT ' + R.nit, R.tel].filter(Boolean).join(' · ') || 'Recibo de pago', 240, 175); g.globalAlpha = 1;
+    const logo = await cargarLogo(); if (logo) g.drawImage(logo, 50, 35, 180, 180);
+    g.fillStyle = '#002c69'; g.font = font(800, 54); g.fillText(R.firma.toUpperCase(), 230, 118);
+    g.font = font(400, 30); g.fillText('Recupera tu tranquilidad financiera', 232, 162);
+    g.fillStyle = '#6b6b70'; g.font = font(400, 28); g.fillText([R.nit && 'NIT ' + R.nit, R.tel].filter(Boolean).join(' · '), 232, 202);
+    g.fillStyle = '#002c69'; g.fillRect(0, 245, W, 6);
     g.fillStyle = '#0b0b0f'; g.font = font(700, 46); g.fillText('RECIBO DE PAGO', 70, 340);
-    g.textAlign = 'right'; g.font = font(600, 34); g.fillStyle = '#5e5ce6'; g.fillText('N.º ' + String(p.fila).padStart(5, '0'), W - 70, 330);
+    g.textAlign = 'right'; g.font = font(600, 34); g.fillStyle = '#002c69'; g.fillText('N.º ' + String(p.fila).padStart(5, '0'), W - 70, 330);
     g.font = font(400, 30); g.fillStyle = '#6b6b70'; g.fillText((R.ciudad ? R.ciudad + ', ' : '') + fdate(p.fecha), W - 70, 375); g.textAlign = 'left';
     g.fillStyle = '#e5e5ea'; g.fillRect(70, 410, W - 140, 2);
     g.fillStyle = '#6b6b70'; g.font = font(400, 30); g.fillText('Recibimos de', 70, 475);
@@ -680,7 +773,7 @@
       <button class="btn" data-act="saveDatosRecibo">Guardar</button></div>`);
   }
   function saveDatosRecibo() {
-    localStorage.setItem(RECIBO, JSON.stringify({ firma: $('#rFirma').value.trim() || 'FinDeuda', nit: $('#rNit').value.trim(), tel: $('#rTel').value.trim(), ciudad: $('#rCiudad').value.trim() }));
+    localStorage.setItem(RECIBO, JSON.stringify({ firma: $('#rFirma').value.trim() || 'Findeudas Legales', nit: $('#rNit').value.trim(), tel: $('#rTel').value.trim(), ciudad: $('#rCiudad').value.trim() }));
     closeSheet(); toast('Datos del recibo guardados');
   }
 
@@ -703,6 +796,9 @@
     chip: el => { ui.filtro = el.dataset.k; rerenderMain(); },
     rango: el => { ui.rango = el.dataset.k; if (ui.rango === 'custom' && !ui.desde) { ui.desde = `${(D.hoy || hoy()).slice(0, 7)}-01`; ui.hasta = D.hoy || hoy(); } rerenderMain(); },
     reload: () => load(), lock,
+    an: el => { ui.an = el.dataset.k; ui.bucket = -1; rerenderMain(); },
+    bucket: el => { const k = Number(el.dataset.k); ui.bucket = ui.bucket === k ? -1 : k; rerenderMain(); },
+    irMora: () => { ui.tab = 'analisis'; ui.an = 'mora'; ui.bucket = -1; closeSheet(true); renderShell(); window.scrollTo(0, 0); },
     cliente: el => showCliente(el.dataset.id),
     closeSheet: () => closeSheet(), back: () => { const b = sheetBack; sheetBack = null; b ? showCliente(b) : closeSheet(); },
     nuevo: menuNuevo,
