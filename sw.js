@@ -1,5 +1,5 @@
 // Solo guarda la "cáscara" de la app. Nunca guarda datos de clientes.
-const CACHE = 'findeuda-v4';
+const CACHE = 'findeuda-v5';
 const SHELL = ['./', 'index.html', 'app.js', 'manifest.json', 'icon-180.png', 'icon-512.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL))); self.skipWaiting(); });
 self.addEventListener('activate', e => {
