@@ -2,7 +2,7 @@
 /* FinDeuda Cartera — app privada. Los datos viven solo en su hoja de Google;
    en el celular solo se guarda, cifrado con su PIN, el acceso al script. */
 (() => {
-  const VAULT = 'fd_vault', FAILS = 'fd_fallos', VERSION = '1.5';
+  const VAULT = 'fd_vault', FAILS = 'fd_fallos', VERSION = '1.6';
   const ITER = 600000, PIN_LEN = 6, MAX_PIN_FAILS = 5;
   const LOCK_BG_MS = 60 * 1000, IDLE_MS = 5 * 60 * 1000, DIAS_MORA = 45;
   const root = document.getElementById('root');
@@ -564,6 +564,111 @@
     } finally { loading(false); }
   }
 
+  /* ---- relación de pagos de un cliente ---- */
+  function movimientosCliente(c) {
+    const k = q => (q.f || '0000-00-00') + String(q.fila).padStart(6, '0') + q.o;
+    const mov = c.pagos.map(p => ({ f: p.fecha, fila: p.fila, o: 'a', t: 'Pago', v: p.valor }))
+      .concat(c.coms.filter(m => m.descuenta === 'Si').map(m => ({ f: m.fecha, fila: m.fila, o: 'b', t: 'Descuento comisión', v: m.valor })))
+      .sort((a, b) => k(a).localeCompare(k(b)));
+    let saldo = c.contrato; mov.forEach(m => { saldo -= m.v; m.s = saldo; });
+    return mov;
+  }
+  async function paginasRelacion(c) {
+    const R = datosRecibo(), logo = await cargarLogo(), mov = movimientosCliente(c);
+    const W = 1275, H = 1650, M = 70, RH = 64;
+    const font = (w, s) => `${w} ${s}px -apple-system, "Helvetica Neue", Arial, sans-serif`;
+    const C1 = M + 14, C2 = M + 80, C3 = M + 330, V = 950, SD = W - M - 14;
+    const pages = []; let cv, g, y;
+    const cab = () => {
+      g.fillStyle = '#002c69'; g.fillRect(M, y - 40, W - 2 * M, 56); g.fillStyle = '#fff'; g.font = font(700, 24);
+      g.fillText('#', C1, y - 3); g.fillText('FECHA', C2, y - 3); g.fillText('CONCEPTO', C3, y - 3);
+      g.textAlign = 'right'; g.fillText('VALOR', V, y - 3); g.fillText('SALDO', SD, y - 3); g.textAlign = 'left'; y += 26;
+    };
+    const nueva = () => {
+      cv = document.createElement('canvas'); cv.width = W; cv.height = H; g = cv.getContext('2d');
+      g.fillStyle = '#fff'; g.fillRect(0, 0, W, H);
+      if (!pages.length) {
+        if (logo) g.drawImage(logo, M - 20, 40, 170, 170);
+        g.fillStyle = '#002c69'; g.font = font(800, 50); g.fillText(R.firma.toUpperCase(), M + 160, 115);
+        g.font = font(400, 28); g.fillText('Recupera tu tranquilidad financiera', M + 162, 158);
+        g.fillStyle = '#6b6b70'; g.font = font(400, 26); g.fillText([R.nit && 'NIT ' + R.nit, R.tel].filter(Boolean).join(' · '), M + 162, 196);
+        g.fillStyle = '#002c69'; g.fillRect(0, 235, W, 6);
+        g.fillStyle = '#0b0b0f'; g.font = font(800, 46); g.fillText('RELACIÓN DE PAGOS', M, 315);
+        g.textAlign = 'right'; g.fillStyle = '#6b6b70'; g.font = font(400, 28); g.fillText((R.ciudad ? R.ciudad + ', ' : '') + fdate(D.hoy || hoy()), W - M, 310); g.textAlign = 'left';
+        // datos del cliente
+        g.fillStyle = '#6b6b70'; g.font = font(400, 26); g.fillText('Cliente', M, 375);
+        g.fillStyle = '#0b0b0f'; g.font = font(700, 36); const nl = wrap(g, c.nombre, M, 420, W - 2 * M, 44);
+        y = 420 + nl * 44;
+        g.fillStyle = '#3a3a3c'; g.font = font(400, 27);
+        g.fillText(`C.C. ${c.id}   ·   ${c.tipo || 'Proceso'}   ·   Inicio: ${c.inicio ? fdate(c.inicio) : 'sin fecha'}`, M, y + 4); y += 50;
+        const est = c.final ? ['Finalizado', '#1f7a3a'] : c.mora ? [`En mora · ${c.sinPagar} días sin pagar`, '#c0392b'] : ['Al día', '#1f7a3a'];
+        g.fillStyle = est[1]; g.font = font(700, 27); g.fillText('Estado: ' + est[0], M, y + 4);
+        g.fillStyle = '#3a3a3c'; g.font = font(400, 27); g.textAlign = 'right'; g.fillText('Último pago: ' + (c.ultimo ? fdate(c.ultimo) : 'sin fecha'), W - M, y + 4); g.textAlign = 'left';
+        y += 40;
+        const bw = (W - 2 * M - 40) / 3;
+        const box = (x, l, v, col) => { g.fillStyle = '#f2f2f7'; g.beginPath(); g.roundRect ? g.roundRect(x, y, bw, 130, 18) : g.rect(x, y, bw, 130); g.fill(); g.fillStyle = '#6b6b70'; g.font = font(400, 26); g.fillText(l, x + 26, y + 43); g.fillStyle = col; g.font = font(800, 42); g.fillText(v, x + 26, y + 102); };
+        box(M, 'Valor del contrato', money(c.contrato), '#0b0b0f');
+        box(M + bw + 20, 'Total abonado', money(c.cancelado), '#1f7a3a');
+        box(M + 2 * (bw + 20), 'Saldo pendiente', money(c.pendiente), c.pendiente > 0 ? '#c0392b' : '#1f7a3a');
+        y += 200;
+      } else {
+        g.fillStyle = '#002c69'; g.font = font(700, 30); g.fillText(R.firma.toUpperCase() + ' · Relación de pagos', M, 80);
+        g.textAlign = 'right'; g.fillStyle = '#6b6b70'; g.font = font(400, 26); g.fillText(c.nombre.length > 34 ? c.nombre.slice(0, 33) + '…' : c.nombre, W - M, 80); g.textAlign = 'left';
+        g.fillStyle = '#002c69'; g.fillRect(M, 100, W - 2 * M, 3); y = 160;
+      }
+      cab(); pages.push(cv);
+    };
+    nueva();
+    // fila inicial: valor del contrato
+    g.fillStyle = '#3a3a3c'; g.font = font(600, 26); g.fillText('Valor del contrato', C3, y + 42);
+    g.textAlign = 'right'; g.fillText(money(c.contrato), SD, y + 42); g.textAlign = 'left'; y += RH;
+    let alt = true;
+    mov.forEach((m, i) => {
+      if (y + RH > H - 100) { nueva(); alt = false; }
+      if (alt) { g.fillStyle = '#f6f7fb'; g.fillRect(M, y, W - 2 * M, RH); } alt = !alt;
+      g.fillStyle = '#8e8e93'; g.font = font(600, 25); g.fillText(String(i + 1), C1, y + 42);
+      g.fillStyle = '#0b0b0f'; g.font = font(400, 26); g.fillText(m.f ? fdate(m.f) : 'Sin fecha', C2, y + 42);
+      g.fillStyle = m.t === 'Pago' ? '#0b0b0f' : '#b36b00'; g.fillText(m.t, C3, y + 42);
+      g.textAlign = 'right'; g.fillStyle = '#1f7a3a'; g.font = font(700, 26); g.fillText('−' + money(m.v), V, y + 42);
+      g.fillStyle = '#0b0b0f'; g.font = font(600, 26); g.fillText(money(m.s), SD, y + 42); g.textAlign = 'left';
+      y += RH;
+    });
+    if (y + 150 > H - 90) nueva();
+    g.fillStyle = '#002c69'; g.fillRect(M, y + 10, W - 2 * M, 3);
+    g.fillStyle = '#0b0b0f'; g.font = font(800, 32); g.fillText('SALDO PENDIENTE', C3, y + 66);
+    g.textAlign = 'right'; g.fillStyle = c.pendiente > 0 ? '#c0392b' : '#1f7a3a'; g.fillText(money(c.pendiente), SD, y + 66); g.textAlign = 'left';
+    g.fillStyle = '#6b6b70'; g.font = font(400, 24);
+    g.fillText(`${c.pagos.length} pago(s) · total pagado ${money(sum(c.pagos, p => p.valor))}${c.descuento ? ' · descuentos ' + money(c.descuento) : ''}`, C3, y + 110);
+    if (!mov.length) { g.fillText('El cliente aún no registra pagos.', C3, y + 145); }
+    pages.forEach((p, i) => { const x = p.getContext('2d'); x.fillStyle = '#8e8e93'; x.font = font(400, 22); x.textAlign = 'center'; x.fillText(`Página ${i + 1} de ${pages.length} · Generado el ${fdate(hoy())}`, W / 2, H - 45); });
+    return pages;
+  }
+  function menuRelacion(id) {
+    const c = D.byId.get(id); if (!c) return;
+    sheetBack = id; F = { tipo: 'relacion', id };
+    openSheet(head('Relación de pagos') + `<div class="body">
+      <div class="list"><div class="kv"><span>Cliente</span><span style="max-width:60%;text-align:right">${esc(c.nombre)}</span></div>
+        <div class="kv"><span>Movimientos</span><span>${movimientosCliente(c).length}</span></div>
+        <div class="kv"><span>Saldo pendiente</span><span>${money(c.pendiente)}</span></div></div>
+      <button class="btn" data-act="relPdf">Enviar como PDF</button>
+      <button class="btn sec" data-act="relImg">Enviar como imagen</button>
+      <p class="foot" style="margin-top:12px">Incluye todos los pagos con fecha, los descuentos por comisión y el saldo después de cada uno.</p></div>`);
+  }
+  const archNombre = c => 'Relacion-pagos-' + c.nombre.split(' ').slice(0, 2).join('-').normalize('NFD').replace(/[^\w-]/g, '');
+  async function relPdf() {
+    const c = D.byId.get(F.id); loading(true);
+    try { const pdf = await crearPdf(await paginasRelacion(c)); loading(false); await compartirArchivos([new File([pdf], archNombre(c) + '.pdf', { type: 'application/pdf' })], 'Relación de pagos'); }
+    finally { loading(false); }
+  }
+  async function relImg() {
+    const c = D.byId.get(F.id); loading(true);
+    try {
+      const pages = await paginasRelacion(c), files = [];
+      for (let i = 0; i < pages.length; i++) files.push(new File([await blobDe(pages[i], 'image/png')], archNombre(c) + (pages.length > 1 ? '-' + (i + 1) : '') + '.png', { type: 'image/png' }));
+      loading(false); await compartirArchivos(files, 'Relación de pagos');
+    } finally { loading(false); }
+  }
+
   function anCartera() {
     const C = D.clientes, act = C.filter(c => !c.final);
     const contr = sum(C, c => c.contrato), canc = sum(C, c => c.cancelado);
@@ -680,6 +785,7 @@
         <div class="row" style="margin-top:8px"><span>Cancelado ${money(c.cancelado)}</span><span>${pct(c.cancelado, c.contrato).toFixed(0)}%</span></div></div>
       <button class="btn" data-act="formPago" data-id="${esc(c.id)}">Registrar pago</button>
       <button class="btn sec" data-act="formComision" data-id="${esc(c.id)}">Agregar comisión</button>
+      <button class="btn sec" data-act="relacion" data-id="${esc(c.id)}">📄 Relación de pagos</button>
       <button class="btn sec" data-act="formEditar" data-id="${esc(c.id)}">Editar cliente</button>
       <h2 class="sec">Seguimiento</h2><div class="list">
         ${kv('Último pago', fdate(c.ultimo))}${kv(`Fecha límite (+${DIAS_MORA} días)`, c.limite ? fdate(c.limite) : '—')}
@@ -972,6 +1078,7 @@
     chip: el => { ui.filtro = el.dataset.k; rerenderMain(); },
     rango: el => { ui.rango = el.dataset.k; if (ui.rango === 'custom' && !ui.desde) { ui.desde = `${(D.hoy || hoy()).slice(0, 7)}-01`; ui.hasta = D.hoy || hoy(); } rerenderMain(); },
     reload: () => load(), lock,
+    relacion: el => menuRelacion(el.dataset.id), relPdf, relImg,
     reporteMora, pdfReporte, imgReporte, compartirReporte, copiarReporte, excelReporte,
     an: el => { ui.an = el.dataset.k; ui.bucket = -1; rerenderMain(); },
     bucket: el => { const k = Number(el.dataset.k); ui.bucket = ui.bucket === k ? -1 : k; rerenderMain(); },
